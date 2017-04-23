@@ -74,7 +74,7 @@ class SelectorBIC(ModelSelector):
 
         :return: GaussianHMM object
         
-        N: number of data points (N = length of self.X)
+        
         p: number of parameters ( p = n_components  : is number of states in HMM)
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -87,14 +87,36 @@ class SelectorBIC(ModelSelector):
         # list of number states in HMM
         list_num_hidden_states = []
         
-        N = len(self.X)
+        #num_features = len(self.X[0])
+        num_features = self.X.shape[1]
         
         for num_hidden_states in range(self.min_n_components, self.max_n_components+1):
             try:
                 model = self.base_model(num_hidden_states)
                 logL = model.score(self.X, self.lengths)
                 
-                p = N*N + 2*num_hidden_states*N - 1
+                
+                ''' GaussianHMM
+                source : https://en.wikipedia.org/wiki/Hidden_Markov_model#Architecture
+                GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000, 
+                random_state=self.random_state, verbose=False).fit(self.X, self.lengths).
+                
+                From hmmlearn, calculating the following parameters that are used in BIC
+                
+                p is the number of model parameters in the test.
+                 https://discussions.udacity.com/t/number-of-parameters-bic-calculation/233235/4
+                Initial state occupation probabilities = numStates
+                Transition probabilities = numStates*(numStates - 1)
+                Emission probabilities = numStates*numFeatures*2 = numMeans+numCovars
+                Parameters = Initial state occupation probabilities + Transition probabilities + Emission probabilities
+                '''
+                
+                initial_state_occupation_probabilities = num_hidden_states
+                transition_probabilities = num_hidden_states * (num_hidden_states - 1)
+                emission_probabilities = num_hidden_states * num_features * 2
+                
+                p = initial_state_occupation_probabilities + transition_probabilities + emission_probabilities
+                
                 bic = -2 * logL + p * np.log(N)
                 
                 list_scores.append(bic)
@@ -103,13 +125,13 @@ class SelectorBIC(ModelSelector):
             except:
                 # eliminate non-viable models from consideration
                 pass
-        
+          
         if list_scores:
-            best_num_hidden_states = list_num_hidden_states[np.argmax(list_scores)] 
+            best_num_hidden_states = list_num_hidden_states[np.argmin(list_scores)] 
         else:
             best_num_hidden_states = self.n_constant
             
-        #best_num_states = list_num_states[np.argmax(list_scores)] if list_scores else self.n_constant
+        #best_num_states = list_num_states[np.argmin(list_scores)] if list_scores else self.n_constant
         
         #print("[SelectorBIC] Result model n_compents: {}".format(best_num_hidden_states))
         
@@ -126,6 +148,16 @@ class SelectorDIC(ModelSelector):
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
 
+    '''
+    Note:
+        self.words = all_word_sequences
+        self.sequences = all_word_sequences[this_word]
+        i.e  self.sequences = self.words[this_word]
+        
+        self.hwords = all_word_Xlengths
+        self.X, self.lengths = all_word_Xlengths[this_word]
+        i.e self.X, self.lengths = self.hwords[this_word]
+    '''
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -134,37 +166,50 @@ class SelectorDIC(ModelSelector):
         # list of number states in HMM
         list_num_hidden_states = []
         
-        list_logL = []
-        
-        sum_logL = 0
+        list_scores = []
         
         for num_hidden_states in range(self.min_n_components, self.max_n_components+1):
             try:
                 model = self.base_model(num_hidden_states)
                 logL = model.score(self.X, self.lengths)
-                sum_logL += logL
                 
-                list_logL.append(logL)
+                # calculate average score over all the other words other than the current word
+                sum_logL = 0
+                K = 0
+                
+                for word in self.words:
+                    if word != self.this_word:
+                        other_word_X, other_word_lengths = self.hwords[word]
+                        try:
+                            sum_logL += hmm_model.score(other_word_X, other_word_lengths)
+                            K += 1
+                            
+                        except:
+                            pass
+                
+                if K > 0:
+                    average_logL = sum_logL/K
+                else:
+                    average_logL = 0
+                    
+                #calculate the total score
+                dic = logL - average_logL
+
+                list_scores.append(dic)
                 list_num_hidden_states.append(num_hidden_states)
                 
             except:
                 # eliminate non-viable models from consideration
                 pass
             
+            
         M = len(list_num_hidden_states) # length of list of number of hidden states
         if M > 2:
-            
-            # list of DIC score
-            list_scores = []
-            
-            for logL in list_logL:
-                dic = logL - (sum_logL - logL)/(M - 1)
-                list_scores.append(dic)
-                
             best_num_hidden_states = list_num_hidden_states[np.argmax(list_scores)]
             
         elif M == 2:
             best_num_hidden_states = list_num_hidden_states[0]
+            
         else:
             best_num_hidden_states = self.n_constant
             
